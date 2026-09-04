@@ -1,0 +1,286 @@
+// =====================================================================
+// prisma/schema.prisma
+//
+// Smart Vehicle Accident Detection and Emergency Response System
+// Relational database schema (PostgreSQL) for an academic prototype.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+enum VehicleStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum AccidentSeverity {
+  MINOR
+  MODERATE
+  SEVERE
+  CRITICAL
+}
+
+enum AccidentSource {
+  SIMULATION
+  HARDWARE
+}
+
+enum AccidentStatus {
+  DETECTED
+  NOTIFIED
+  ACKNOWLEDGED
+  RESOLVED
+  FALSE_ALARM
+}
+
+enum AgencyType {
+  POLICE
+  HOSPITAL
+}
+
+enum NotificationChannel {
+  CONSOLE
+  EMAIL
+  SMS
+}
+
+enum NotificationRecipientType {
+  POLICE
+  HOSPITAL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  ACKNOWLEDGED
+}
+
+// ---------------------------------------------------------------------
+// USER  (dashboard / operator accounts)
+// ---------------------------------------------------------------------
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(OPERATOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------
+// VEHICLE
+// ---------------------------------------------------------------------
+model Vehicle {
+  id                  String        @id @default(uuid())
+  registrationNumber  String        @unique
+  model               String
+  ownerName           String
+  ownerPhone          String
+  deviceId            String?       @unique
+  status              VehicleStatus @default(ACTIVE)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  sensorReadings SensorReading[]
+  accidents      Accident[]
+
+  @@index([registrationNumber])
+  @@index([deviceId])
+  @@map("vehicles")
+}
+
+// ---------------------------------------------------------------------
+// SENSOR READING  (raw telemetry, simulated or hardware-sourced)
+// ---------------------------------------------------------------------
+model SensorReading {
+  id             String   @id @default(uuid())
+  vehicleId      String
+  timestamp      DateTime @default(now())
+
+  speed          Float // km/h
+  accelerationX  Float // g
+  accelerationY  Float // g
+  accelerationZ  Float // g
+  gyroscopeX     Float // deg/s
+  gyroscopeY     Float // deg/s
+  gyroscopeZ     Float // deg/s
+
+  latitude       Float?
+  longitude      Float?
+
+  source         AccidentSource @default(SIMULATION)
+  createdAt      DateTime       @default(now())
+
+  vehicle  Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  snapshots AccidentSensorSnapshot[]
+
+  @@index([vehicleId])
+  @@index([timestamp])
+  @@index([vehicleId, timestamp])
+  @@map("sensor_readings")
+}
+
+// ---------------------------------------------------------------------
+// POLICE STATION
+// ---------------------------------------------------------------------
+model PoliceStation {
+  id        String   @id @default(uuid())
+  name      String
+  address   String
+  phone     String?
+  latitude  Float
+  longitude Float
+  createdAt DateTime @default(now())
+
+  accidents     Accident[]
+  notifications Notification[]
+
+  @@index([latitude, longitude])
+  @@map("police_stations")
+}
+
+// ---------------------------------------------------------------------
+// HOSPITAL
+// ---------------------------------------------------------------------
+model Hospital {
+  id        String   @id @default(uuid())
+  name      String
+  address   String
+  phone     String?
+  latitude  Float
+  longitude Float
+  createdAt DateTime @default(now())
+
+  accidents     Accident[]
+  notifications Notification[]
+
+  @@index([latitude, longitude])
+  @@map("hospitals")
+}
+
+// ---------------------------------------------------------------------
+// ACCIDENT  (core record)
+// ---------------------------------------------------------------------
+model Accident {
+  id     String @id @default(uuid())
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  occurredAt DateTime @default(now())
+
+  latitude  Float
+  longitude Float
+
+  speedBeforeImpact Float
+  impactSpeed       Float
+  speedAfterImpact  Float?
+
+  peakAccelerationX Float
+  peakAccelerationY Float
+  peakAccelerationZ Float
+  peakGyroX         Float
+  peakGyroY         Float
+  peakGyroZ         Float
+
+  severity         AccidentSeverity
+  confidenceScore  Float // 0.0 - 1.0
+  source           AccidentSource   @default(SIMULATION)
+  status           AccidentStatus   @default(DETECTED)
+
+  nearestPoliceStationId String?
+  nearestPoliceStation   PoliceStation? @relation(fields: [nearestPoliceStationId], references: [id])
+  policeDistanceKm       Float?
+
+  nearestHospitalId String?
+  nearestHospital   Hospital? @relation(fields: [nearestHospitalId], references: [id])
+  hospitalDistanceKm Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sensorSnapshots AccidentSensorSnapshot[]
+  notifications   Notification[]
+
+  @@index([vehicleId])
+  @@index([occurredAt])
+  @@index([severity])
+  @@index([status])
+  @@index([latitude, longitude])
+  @@map("accidents")
+}
+
+// ---------------------------------------------------------------------
+// ACCIDENT SENSOR SNAPSHOT
+// (links the rolling-buffer readings around the moment of impact to
+//  the accident record, so the exact before/at/after timeline is
+//  reconstructable for the accident details page)
+// ---------------------------------------------------------------------
+model AccidentSensorSnapshot {
+  id               String   @id @default(uuid())
+  accidentId       String
+  sensorReadingId  String
+  relativePosition String // "BEFORE" | "IMPACT" | "AFTER"
+  offsetMs         Int // offset from detected impact moment, in ms (can be negative)
+
+  accident      Accident      @relation(fields: [accidentId], references: [id], onDelete: Cascade)
+  sensorReading SensorReading @relation(fields: [sensorReadingId], references: [id], onDelete: Cascade)
+
+  @@index([accidentId])
+  @@index([sensorReadingId])
+  @@map("accident_sensor_snapshots")
+}
+
+// ---------------------------------------------------------------------
+// NOTIFICATION
+// ---------------------------------------------------------------------
+model Notification {
+  id          String                     @id @default(uuid())
+  accidentId  String
+  accident    Accident                   @relation(fields: [accidentId], references: [id], onDelete: Cascade)
+
+  recipientType NotificationRecipientType
+
+  policeStationId String?
+  policeStation   PoliceStation? @relation(fields: [policeStationId], references: [id])
+
+  hospitalId String?
+  hospital   Hospital? @relation(fields: [hospitalId], references: [id])
+
+  channel      NotificationChannel
+  status       NotificationStatus @default(PENDING)
+  message      String
+  errorDetail  String?
+
+  sentAt         DateTime?
+  acknowledgedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accidentId])
+  @@index([status])
+  @@index([recipientType])
+  @@map("notifications")
+}
