@@ -27,6 +27,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const simulationRoutes = require('./routes/simulation.routes');
 
 const app = express();
+app.set('trust proxy', 1);
 
 // ---------------------------------------------------------------------
 // Security & core middleware (req #15)
