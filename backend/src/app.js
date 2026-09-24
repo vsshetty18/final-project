@@ -32,9 +32,18 @@ const app = express();
 // Security & core middleware (req #15)
 // ---------------------------------------------------------------------
 app.use(helmet());
+const allowedOriginPattern = /\.vercel\.app$/;
+
 app.use(
   cors({
-    origin: env.CLIENT_URL,
+    origin: (origin, callback) => {
+      // Allow non-browser requests (no origin header, e.g. curl/Postman)
+      if (!origin) return callback(null, true);
+      if (origin === env.CLIENT_URL || allowedOriginPattern.test(new URL(origin).hostname)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
   })
 );
